@@ -35,6 +35,9 @@
 #include "Baselib.h"
 #include "Cpp/ReentrantLock.h"
 
+#include "hybridclr/metadata/Assembly.h"
+#include "hybridclr/metadata/MetadataModule.h"
+
 typedef Il2CppReaderWriterLockedHashMap<Il2CppClass*, Il2CppClass*> PointerTypeMap;
 
 typedef Il2CppHashSet<const Il2CppGenericMethod*, il2cpp::metadata::Il2CppGenericMethodHash, il2cpp::metadata::Il2CppGenericMethodCompare> Il2CppGenericMethodSet;
@@ -107,6 +110,8 @@ struct PairToKeyConverter
 
 typedef il2cpp::utils::collections::ArrayValueMap<const Il2CppGuid*, std::pair<const Il2CppGuid*, Il2CppClass*>, PairToKeyConverter<const Il2CppGuid*, Il2CppClass*> > GuidToClassMap;
 static GuidToClassMap s_GuidToNonImportClassMap;
+
+static il2cpp::utils::dynamic_array<Il2CppAssembly*> s_cliAssemblies;
 
 void il2cpp::vm::MetadataCache::Register(const Il2CppCodeRegistration* const codeRegistration, const Il2CppMetadataRegistration* const metadataRegistration, const Il2CppCodeGenOptions* const codeGenOptions)
 {
@@ -731,6 +736,10 @@ static int CompareIl2CppTokenAdjustorThunkPair(const void* pkey, const void* pel
 
 Il2CppMethodPointer il2cpp::vm::MetadataCache::GetAdjustorThunk(const Il2CppImage* image, uint32_t token)
 {
+    if (hybridclr::metadata::IsInterpreterIndex(image->token))
+    {
+        return hybridclr::metadata::MetadataModule::GetAdjustorThunk(image, token);
+    }
     if (image->codeGenModule->adjustorThunkCount == 0)
         return NULL;
 
@@ -754,6 +763,11 @@ Il2CppMethodPointer il2cpp::vm::MetadataCache::GetMethodPointer(const Il2CppImag
     if (rid == 0)
         return NULL;
 
+    if (hybridclr::metadata::IsInterpreterImage(image))
+    {
+        return hybridclr::metadata::MetadataModule::GetMethodPointer(image, token);
+    }
+
     IL2CPP_ASSERT(rid <= image->codeGenModule->methodPointerCount);
 
     return image->codeGenModule->methodPointers[rid - 1];
@@ -765,7 +779,10 @@ InvokerMethod il2cpp::vm::MetadataCache::GetMethodInvoker(const Il2CppImage* ima
     uint32_t table = GetTokenType(token);
     if (rid == 0)
         return Runtime::GetMissingMethodInvoker();
-
+    if (hybridclr::metadata::IsInterpreterImage(image))
+    {
+        return hybridclr::metadata::MetadataModule::GetMethodInvoker(image, token);
+    }
     int32_t index = image->codeGenModule->invokerIndices[rid - 1];
 
     if (index == kMethodIndexInvalid)
@@ -809,6 +826,10 @@ static bool GenericInstancesMatch(const MethodInfo* method, const MethodInfo* ma
 
 Il2CppMethodPointer il2cpp::vm::MetadataCache::GetReversePInvokeWrapper(const Il2CppImage* image, const MethodInfo* method)
 {
+    if (hybridclr::metadata::IsInterpreterImage(image))
+    {
+        return hybridclr::metadata::MetadataModule::GetReversePInvokeWrapper(image, method);
+    }
     if (image->codeGenModule->reversePInvokeWrapperCount == 0)
         return NULL;
 
@@ -962,17 +983,67 @@ const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyFromIndex(AssemblyIn
 
 const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyByName(const char* nameToFind)
 {
+    const char* assemblyName = hybridclr::GetAssemblyNameFromPath(nameToFind);
+
+    il2cpp::utils::VmStringUtils::CaseInsensitiveComparer comparer;
+
     for (int i = 0; i < s_AssembliesCount; i++)
     {
         const Il2CppAssembly* assembly = s_AssembliesTable + i;
 
-        const char* assemblyName = assembly->aname.name;
-
-        if (strcmp(assemblyName, nameToFind) == 0)
+        if (comparer(assembly->aname.name, assemblyName) || comparer(assembly->image->name, assemblyName))
             return assembly;
     }
 
-    return NULL;
+    il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
+
+    for (auto assembly : s_cliAssemblies)
+    {
+        if (comparer(assembly->aname.name, assemblyName) || comparer(assembly->image->name, assemblyName))
+            return assembly;
+    }
+
+    return nullptr;
+}
+
+void il2cpp::vm::MetadataCache::RegisterInterpreterAssembly(Il2CppAssembly* assembly)
+{
+    il2cpp::vm::Assembly::Register(assembly);
+    s_cliAssemblies.push_back(assembly);
+}
+
+const Il2CppAssembly* il2cpp::vm::MetadataCache::LoadAssemblyFromBytes(const char* assemblyBytes, size_t length)
+{
+    il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
+
+    Il2CppAssembly* newAssembly = hybridclr::metadata::Assembly::LoadFromBytes(assemblyBytes, length, true);
+    // avoid register placeholder assembly twicely.
+    for (Il2CppAssembly* ass : s_cliAssemblies)
+    {
+        if (ass == newAssembly)
+        {
+            return ass;
+        }
+    }
+    RegisterInterpreterAssembly(newAssembly);
+    return newAssembly;
+}
+
+const Il2CppGenericMethod* il2cpp::vm::MetadataCache::FindGenericMethod(std::function<bool(const Il2CppGenericMethod*)> predic)
+{
+    for (auto e : s_MethodTableMap)
+    {
+        if (predic(e.first))
+        {
+            return e.first;
+        }
+    }
+    return nullptr;
+}
+
+void il2cpp::vm::MetadataCache::FixThreadLocalStaticOffsetForFieldLocked(FieldInfo* field, int32_t offset, const il2cpp::os::FastAutoLock& lock)
+{
+    s_ThreadLocalStaticOffsetMap[field] = offset;
 }
 
 Il2CppImage* il2cpp::vm::MetadataCache::GetImageFromIndex(ImageIndex index)

@@ -1030,3 +1030,5 @@ typedef struct Il2CppGlobalMetadataHeader2
     int32_t windowsRuntimeStringsSize4;
 } Il2CppGlobalMetadataHeader2;
 #pragma pack(pop, p1)
+
+typedef Il2CppCustomAttributeDataRange Il2CppCustomAttributeTypeRange;
