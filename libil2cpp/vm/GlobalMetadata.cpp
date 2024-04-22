@@ -118,7 +118,7 @@ static T MetadataOffset(const void* metadata, size_t itemIndex)
 }
 
 
-static const char* GetStringFromIndex(StringIndex index)
+const char* il2cpp::vm::GlobalMetadata::GetStringFromIndex(StringIndex index)
 {
     if (hybridclr::metadata::IsInterpreterIndex(index))
     {
@@ -159,7 +159,7 @@ MethodIndex il2cpp::vm::GlobalMetadata::GetMethodIndexFromDefinition(const Il2Cp
     {
         return hybridclr::metadata::MetadataModule::GetImage(methodDef)->GetMethodIndexFromDefinition(methodDef);
     }
-    return (MethodIndex)(methodDef - MetadataOffset<const Il2CppMethodDefinition*>(s_GlobalMetadata, s_GlobalMetadataHeader->methodsOffset, 0));
+    return (MethodIndex)(methodDef - MetadataOffset<const Il2CppMethodDefinition*>(s_GlobalMetadata, s_GlobalMetadataHeader(methodsOffset), 0));
 }
 
 const MethodInfo* il2cpp::vm::GlobalMetadata::GetMethodInfoFromMethodDefinitionIndex(MethodIndex index)
@@ -914,7 +914,7 @@ Il2CppInterfaceOffsetInfo il2cpp::vm::GlobalMetadata::GetInterfaceOffsetInfo(con
         return hybridclr::metadata::MetadataModule::GetInterfaceOffsetInfo(typeDefine, index);
     }
 
-    index = index + typeDefinition->interfaceOffsetsStart;
+    index = index + typeDefine->interfaceOffsetsStart;
     IL2CPP_ASSERT(index >= 0 && static_cast<uint32_t>(index) <= s_GlobalMetadataHeader(interfaceOffsetsSize) / sizeof(Il2CppInterfaceOffsetPair));
     const Il2CppInterfaceOffsetPair* interfaceOffsets = (const Il2CppInterfaceOffsetPair*)((const char*)s_GlobalMetadata + s_GlobalMetadataHeader(interfaceOffsetsOffset));
 
@@ -1146,8 +1146,8 @@ const Il2CppMethodDefinition* il2cpp::vm::GlobalMetadata::GetMethodDefinitionFro
     }
 
     uint32_t index = typeDefinition->vtableStart + vTableSlot;
-    IL2CPP_ASSERT(index >= 0 && index <= s_GlobalMetadataHeader->vtableMethodsSize / sizeof(EncodedMethodIndex));
-    const EncodedMethodIndex* vTableMethodReferences = (const EncodedMethodIndex*)((const char*)s_GlobalMetadata + s_GlobalMetadataHeader->vtableMethodsOffset);
+    IL2CPP_ASSERT(index >= 0 && index <= s_GlobalMetadataHeader(vtableMethodsSize) / sizeof(EncodedMethodIndex));
+    const EncodedMethodIndex* vTableMethodReferences = (const EncodedMethodIndex*)((const char*)s_GlobalMetadata + s_GlobalMetadataHeader(vtableMethodsOffset));
     EncodedMethodIndex vTableMethodReference = vTableMethodReferences[index];
 
     if (vTableMethodReference == 0)
