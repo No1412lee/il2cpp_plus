@@ -171,7 +171,7 @@ void* il2cpp_codegen_get_thread_static_field_data_pointer(RuntimeField* field)
     IL2CPP_ASSERT(il2cpp::vm::Field::IsThreadStatic(field));
 
     int threadStaticFieldOffset = il2cpp::vm::MetadataCache::GetThreadLocalStaticOffsetForField(field);
-    void* threadStaticData = il2cpp::vm::Thread::GetThreadStaticDataForThread(field->parent->thread_static_fields_offset, il2cpp::vm::Thread::Current());
+    void* threadStaticData = il2cpp::vm::Thread::GetThreadStaticData(field->parent->thread_static_fields_offset);
     return static_cast<uint8_t*>(threadStaticData) + threadStaticFieldOffset;
 }
 
@@ -974,6 +974,7 @@ void il2cpp_codegen_runtime_constrained_call(RuntimeClass* type, const RuntimeMe
     // For value types, the constrained RGCTX does our lookup for us
     else if (type == constrainedMethod->klass)
     {
+        il2cpp_codegen_runtime_class_init_inline(type);
         // If the value type overrode the method, do a direct call wiht the pointer to the struct
         constrainedMethod->invoker_method(constrainedMethod->methodPointer, constrainedMethod, objBuffer, args, retVal);
     }
