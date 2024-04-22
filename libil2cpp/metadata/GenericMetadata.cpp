@@ -27,6 +27,8 @@
 #include "Baselib.h"
 #include "Cpp/ReentrantLock.h"
 
+#include "hybridclr/metadata/MetadataUtil.h"
+
 using namespace il2cpp::vm;
 using il2cpp::metadata::GenericMethod;
 using il2cpp::os::FastAutoLock;
@@ -126,7 +128,7 @@ namespace metadata
                     return NULL; // This is a generic type that was too deeply nested to generate
 
                 const Il2CppGenericInst* inflatedInst = GetInflatedGenericIntance(inst, context, inflateMethodVars);
-                Il2CppGenericClass* genericClass = GenericMetadata::GetGenericClass(GenericClass::GetTypeDefinition(type->data.generic_class), inflatedInst);
+                Il2CppGenericClass* genericClass = GenericMetadata::GetGenericClass(type->data.generic_class->type, inflatedInst);
                 if (genericClass != type->data.generic_class)
                 {
                     Il2CppType* genericType = (Il2CppType*)MetadataMalloc(sizeof(Il2CppType));
@@ -158,7 +160,7 @@ namespace metadata
     Il2CppGenericClass* GenericMetadata::GetGenericClass(const Il2CppType* genericTypeDefinition, const Il2CppGenericInst* inst)
     {
         // Assert that the element type is a non-inflated generic type defintion
-        IL2CPP_ASSERT(il2cpp::vm::Class::IsGenericTypeDefinition(vm::Class::FromIl2CppType(genericTypeDefinition)));
+        IL2CPP_ASSERT(genericTypeDefinition->type == IL2CPP_TYPE_CLASS || genericTypeDefinition->type == IL2CPP_TYPE_VALUETYPE);
 
         // temporary inst to lookup a permanent one that may already exist
         Il2CppGenericClass genericClass = { 0 };
@@ -251,6 +253,10 @@ namespace metadata
     Il2CppRGCTXData* GenericMetadata::InflateRGCTXLocked(const Il2CppImage* image, uint32_t token, const Il2CppGenericContext* context, const FastAutoLock& lock)
     {
         // This method assumes that it has the g_MetadataLock
+        if (hybridclr::metadata::IsInterpreterImage(image))
+        {
+            return nullptr;
+        }
 
         RGCTXCollection collection = MetadataCache::GetRGCTXs(image, token);
         if (collection.count == 0)

@@ -19,10 +19,49 @@ struct Il2CppGenericMethod;
 struct Il2CppType;
 struct Il2CppString;
 
+struct Il2CppMethodDefinition;
+struct Il2CppFieldDefinition;
+struct Il2CppTypeDefinition;
+struct Il2CppParameterDefinition;
+
+typedef struct Il2CppImageGlobalMetadata
+{
+    TypeDefinitionIndex typeStart;
+    TypeDefinitionIndex exportedTypeStart;
+    CustomAttributeIndex customAttributeStart;
+    MethodIndex entryPointIndex;
+    const Il2CppImage* image;
+} Il2CppImageGlobalMetadata;
+
+
 namespace il2cpp
 {
 namespace vm
 {
+    enum PackingSize
+    {
+        Zero,
+        One,
+        Two,
+        Four,
+        Eight,
+        Sixteen,
+        ThirtyTwo,
+        SixtyFour,
+        OneHundredTwentyEight
+    };
+
+    const int kBitIsValueType = 1;
+    const int kBitIsEnum = 2;
+    const int kBitHasFinalizer = 3;
+    const int kBitHasStaticConstructor = 4;
+    const int kBitIsBlittable = 5;
+    const int kBitIsImportOrWindowsRuntime = 6;
+    const int kPackingSize = 7;     // This uses 4 bits from bit 7 to bit 10
+    const int kPackingSizeIsDefault = 11;
+    const int kClassSizeIsDefault = 12; // 此参数只用于反射查询，并无实际意义
+    const int kSpecifiedPackingSize = 13; // This uses 4 bits from bit 13 to bit 16 。此参数目前只用于反射查询，并无直接用处
+
     class GlobalMetadata
     {
     public:
@@ -71,6 +110,26 @@ namespace vm
         static const MethodInfo* GetMethodInfoFromVTableSlot(const Il2CppClass* klass, int32_t vTableSlot);
 
         static const uint8_t* GetParameterDefaultValue(const MethodInfo* method, int32_t parameterPosition, const Il2CppType** type, bool* isExplicitySetNullDefaultValue);
+        static Il2CppMetadataGenericContainerHandle GetGenericContainerFromIndex(GenericContainerIndex index);
+        static const Il2CppMethodDefinition* GetMethodDefinitionFromIndex(MethodIndex index);
+        static MethodIndex GetMethodIndexFromDefinition(const Il2CppMethodDefinition* methodDefine);
+        static const Il2CppType* GetInterfaceFromOffset(const Il2CppTypeDefinition* def, TypeInterfaceIndex offset);
+        static Il2CppInterfaceOffsetInfo GetInterfaceOffsetInfo(const Il2CppTypeDefinition* typeDefine, TypeInterfaceOffsetIndex index);
+        static const Il2CppMethodDefinition* GetMethodDefinitionFromVTableSlot(const Il2CppTypeDefinition* typeDefine, int32_t vTableSlot);
+        //static const Il2CppMethodDefinition* GetMethodDefinitionFromVTableSlot(Il2CppClass* typeDefine, int32_t vTableSlot);
+        static void InitializeTypeHandle(Il2CppType* type);
+        static Il2CppClass* FromTypeDefinition(TypeDefinitionIndex index);
+        static uint8_t ConvertPackingSizeEnumToValue(PackingSize packingSize);
+        static PackingSize ConvertPackingSizeToEnum(uint8_t packingSize);
+
+        static Il2CppMetadataGenericParameterHandle GetGenericParameterFromIndexInternal(GenericParameterIndex index);
+        static const Il2CppFieldDefinition* GetFieldDefinitionFromTypeDefAndFieldIndex(const Il2CppTypeDefinition* typeDef, FieldIndex index);
+
+        static const char* GetStringFromIndex(StringIndex index);
+        static TypeDefinitionIndex GetIndexForTypeDefinition(const Il2CppClass* klass);
+        static const Il2CppParameterDefinition* GetParameterDefinitionFromIndex(const Il2CppClass* klass, ParameterIndex index);
+        static const Il2CppParameterDefinition* GetParameterDefinitionFromIndex(const Il2CppMethodDefinition* methodDef, ParameterIndex index);
+
         static const uint8_t* GetFieldDefaultValue(const FieldInfo* field, const Il2CppType** type);
         static uint32_t GetFieldOffset(const Il2CppClass* klass, int32_t fieldIndexInType, FieldInfo* field);
         static int GetFieldMarshaledSizeForField(const FieldInfo* field);
@@ -79,6 +138,7 @@ namespace vm
         static Il2CppMetadataMethodInfo GetMethodInfo(const Il2CppClass* klass, TypeMethodIndex index);
         static Il2CppMetadataParameterInfo GetParameterInfo(const Il2CppClass* klass, Il2CppMetadataMethodDefinitionHandle handle, MethodParameterIndex index);
         static Il2CppMetadataPropertyInfo GetPropertyInfo(const Il2CppClass* klass, TypePropertyIndex index);
+        //static const Il2CppPropertyDefinition* GetPropertyDefinitionFromIndex(const Il2CppImage* image, PropertyIndex index);
         static Il2CppMetadataEventInfo GetEventInfo(const Il2CppClass* klass, TypeEventIndex index);
 
         static Il2CppMetadataGenericContainerHandle GetGenericContainerFromGenericClass(const Il2CppGenericClass* genericClass);
