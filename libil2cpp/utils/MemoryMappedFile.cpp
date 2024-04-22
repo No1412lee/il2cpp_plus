@@ -82,6 +82,17 @@ namespace utils
 
         return true;
     }
+
+	int64_t MemoryMappedFile::GetLength(void* address)
+	{
+		int64_t length = -1;
+		std::map<void*, int64_t>::iterator entry = s_MappedAddressToMappedLength.find(address);
+		if (entry != s_MappedAddressToMappedLength.end())
+		{
+			length = entry->second;
+		}
+		return length;
+	}
 }
 }
 

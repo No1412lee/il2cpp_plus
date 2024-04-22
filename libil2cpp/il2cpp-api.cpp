@@ -45,6 +45,7 @@
 #include <locale.h>
 #include <fstream>
 #include <string>
+#include <random>
 
 using namespace il2cpp::vm;
 using il2cpp::utils::Memory;
@@ -106,6 +107,26 @@ int il2cpp_init_utf16(const Il2CppChar* domain_name)
 void il2cpp_shutdown()
 {
     Runtime::Shutdown();
+}
+
+static uint32_t _y = 223589UL;
+inline uint32_t xor32()
+{
+	_y ^= (_y << 13); _y ^= (_y >> 17); return (_y ^= (_y << 15));
+}
+
+void* il2cpp_gchandle_get(const uint32_t handleid)
+{
+#define DO_API(r, n, p)
+#define DO_API_NO_RETURN(r, n, p)
+#define DO_API_SECRET(r, n, p) { __API_ID = __API_ID + xor32()%100 + 1; if (handleid == __API_ID) return (void*)n; }
+	uint32_t __API_ID = 223589;
+	_y = __API_ID;
+#include "il2cpp-api-functions.h"
+#undef DO_API
+#undef DO_API_NO_RETURN
+#undef DO_API_SECRET
+	return NULL;
 }
 
 void il2cpp_set_config_dir(const char *config_path)
@@ -877,6 +898,41 @@ void il2cpp_unity_liveness_calculation_from_root(Il2CppObject* root, void* state
 void il2cpp_unity_liveness_calculation_from_statics(void* state)
 {
     Liveness::FromStatics(state);
+}
+
+int il2cpp_unity_liveness_get_statics_class_count()
+{
+    return Liveness::GetStaticsCount();
+}
+
+void il2cpp_unity_liveness_collect_statics_by_worker(void* state, int need_reset, int start_index, int batch_count)
+{
+    Liveness::CollectStaticsByWorker(state, need_reset, start_index, batch_count);
+}
+
+void il2cpp_unity_liveness_traverse_objects(void* state)
+{
+    Liveness::ProcessObjects(state);
+}
+
+void il2cpp_unity_liveness_calculation_from_statics_by_worker(void* state, int worker_index, int worker_count)
+{
+    Liveness::FromStaticsByWorker(state, worker_index, worker_count);
+}
+
+int il2cpp_unity_liveness_try_steal_traverse_job(void* state, void* state_to_steal, int worker_count, int min_steal_count)
+{
+    return Liveness::TryStealTraverseJob(state, state_to_steal, worker_count, min_steal_count);
+}
+
+void il2cpp_unity_liveness_reset_time_consuming_report(bool profile_on)
+{
+    Liveness::ResetTimeConsumingReport(profile_on);
+}
+
+const char* il2cpp_unity_liveness_gen_time_consuming_report(void* state, uint32_t threshold)
+{
+    return Liveness::GenerateTimeConsumingReport(state, threshold);
 }
 
 void il2cpp_unity_liveness_finalize(void* state)

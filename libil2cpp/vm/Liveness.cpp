@@ -10,6 +10,12 @@
 #include "il2cpp-tabledefs.h"
 #include "il2cpp-class-internals.h"
 #include "il2cpp-object-internals.h"
+#include "Baselib.h"
+#include "Cpp/ReentrantLock.h"
+#if PROFILE_TIME_CONSUMING
+#include "os/Time.h"
+#include <vector>
+#endif
 
 #define MARK_OBJ(obj) \
     do { \
@@ -40,7 +46,20 @@ namespace vm
     /* how far we recurse processing array elements before we stop. Prevents stack overflow */
     const int kMaxTraverseRecursionDepth = 128;
 
+    const int kMaxLocalElementsSize = 256;
+
     struct CustomGrowableBlockArray;
+
+#define kBlockSize (8 * 1024)
+#define kArrayElementsPerBlock ((kBlockSize - 3 *sizeof (void*)) / sizeof (void*))
+
+    struct CustomArrayBlock
+    {
+        Il2CppObject** next_item;
+        CustomArrayBlock *prev_block;
+        CustomArrayBlock *next_block;
+        Il2CppObject* p_data[kArrayElementsPerBlock];
+    };
 
     struct LivenessState
     {
@@ -64,7 +83,8 @@ namespace vm
         static bool ShouldTraverseObjects(size_t index, int32_t recursion_depth)
         {
             // Add kArrayElementsPerChunk objects at a time and then traverse
-            return ((index + 1) & (kArrayElementsPerChunk - 1)) == 0 && recursion_depth < kMaxTraverseRecursionDepth;
+            // return ((index + 1) & (kArrayElementsPerChunk - 1)) == 0 && recursion_depth < kMaxTraverseRecursionDepth;
+            return false;
         }
 
         CustomGrowableBlockArray* all_objects;
@@ -72,6 +92,7 @@ namespace vm
         Il2CppClass*          filter;
 
         CustomGrowableBlockArray* process_array;
+        CustomArrayBlock process_array_local;
 
         void*               callback_userdata;
 
@@ -79,17 +100,13 @@ namespace vm
         Liveness::ReallocateArrayCallback reallocateArray;
 
         int32_t               traverse_depth; // track recursion. Prevent stack overflow by limiting recurion
-    };
 
-#define kBlockSize (8 * 1024)
-#define kArrayElementsPerBlock ((kBlockSize - 3 *sizeof (void*)) / sizeof (void*))
-
-    struct CustomArrayBlock
-    {
-        Il2CppObject** next_item;
-        CustomArrayBlock *prev_block;
-        CustomArrayBlock *next_block;
-        Il2CppObject* p_data[kArrayElementsPerBlock];
+        // profile
+#if PROFILE_TIME_CONSUMING
+        std::map<const char*, uint32_t> collectStaticCostMap;
+        std::map<const char*, uint32_t> traverseObjCostMap;
+        uint32_t processObjectCount;
+#endif
     };
 
     struct CustomBlockArrayIterator;
@@ -98,12 +115,16 @@ namespace vm
         CustomArrayBlock *first_block;
         CustomArrayBlock *current_block;
         CustomBlockArrayIterator *iterator;
+        baselib::ReentrantLock mutex;
+        volatile int count;
 
         CustomGrowableBlockArray(LivenessState *state);
 
         bool IsEmpty();
         void PushBack(Il2CppObject* value, LivenessState *state);
+        void PushBackNoLock(Il2CppObject* value, LivenessState *state);
         Il2CppObject* PopBack();
+        Il2CppObject* PopBackNoLock();
         void ResetIterator();
         Il2CppObject* Next();
         void Clear();
@@ -124,6 +145,7 @@ namespace vm
         current_block->next_block = NULL;
         current_block->next_item = current_block->p_data;
         first_block = current_block;
+        count = 0;
 
         iterator = new CustomBlockArrayIterator();
         iterator->array = this;
@@ -136,7 +158,7 @@ namespace vm
         return first_block->next_item == first_block->p_data;
     }
 
-    void CustomGrowableBlockArray::PushBack(Il2CppObject* value, LivenessState *state)
+    void CustomGrowableBlockArray::PushBackNoLock(Il2CppObject* value, LivenessState *state)
     {
         if (current_block->next_item == current_block->p_data + kArrayElementsPerBlock)
         {
@@ -152,9 +174,17 @@ namespace vm
             current_block = new_block;
         }
         *current_block->next_item++ = value;
+        ++count;
     }
 
-    Il2CppObject* CustomGrowableBlockArray::PopBack()
+    void CustomGrowableBlockArray::PushBack(Il2CppObject* value, LivenessState *state)
+    {
+        mutex.Acquire();
+        PushBackNoLock(value, state);
+        mutex.Release();
+    }
+
+    Il2CppObject* CustomGrowableBlockArray::PopBackNoLock()
     {
         if (current_block->next_item == current_block->p_data)
         {
@@ -163,7 +193,16 @@ namespace vm
             current_block = current_block->prev_block;
             current_block->next_item = current_block->p_data + kArrayElementsPerBlock;
         }
+        --count;
         return *--current_block->next_item;
+    }
+
+    Il2CppObject* CustomGrowableBlockArray::PopBack()
+    {
+        mutex.Acquire();
+        Il2CppObject* obj = PopBackNoLock();
+        mutex.Release();
+        return obj;
     }
 
     void CustomGrowableBlockArray::ResetIterator()
@@ -193,6 +232,7 @@ namespace vm
             block->next_item = block->p_data;
             block = block->next_block;
         }
+        count = 0;
     }
 
     void CustomGrowableBlockArray::Destroy(LivenessState *state)
@@ -230,6 +270,14 @@ namespace vm
 
         all_objects = new CustomGrowableBlockArray(this);
         process_array = new CustomGrowableBlockArray(this);
+
+        process_array_local.next_item = process_array_local.p_data;
+        process_array_local.prev_block = NULL;
+        process_array_local.next_block = NULL;
+
+#if PROFILE_TIME_CONSUMING
+        processObjectCount = 0;
+#endif
     }
 
     LivenessState::~LivenessState()
@@ -259,10 +307,39 @@ namespace vm
         Il2CppObject* object = NULL;
 
         traverse_depth++;
-        while (!process_array->IsEmpty())
+        while (process_array_local.next_item != process_array_local.p_data || !process_array->IsEmpty())
         {
-            object = process_array->PopBack();
-            TraverseGenericObject(object, this);
+            if (process_array_local.next_item > process_array_local.p_data)
+            {
+                object = *--process_array_local.next_item;
+            }
+            else
+            {
+                object = process_array->PopBack();
+            }
+            if (object != NULL)
+            {
+#if PROFILE_TIME_CONSUMING
+                uint32_t startTime = os::Time::GetTicksMillisecondsMonotonic();
+#endif
+                TraverseGenericObject(object, this);
+#if PROFILE_TIME_CONSUMING
+                if (s_ProfileTimeConsuming)
+                {
+                    uint32_t delta = os::Time::GetTicksMillisecondsMonotonic() - startTime;
+                    Il2CppClass* klass = GET_CLASS(object);
+                    const char* klassName = Liveness::GetClassName(klass);
+                    if (klassName != NULL)
+                    {
+                        std::map<const char*, uint32_t>::iterator it = traverseObjCostMap.find(klassName);
+                        if (it == traverseObjCostMap.end() || it->second < delta)
+                        {
+                            traverseObjCostMap[klassName] = delta;
+                        }
+                    }
+                }
+#endif
+            }
         }
         traverse_depth--;
     }
@@ -454,6 +531,9 @@ namespace vm
         if (!object || IS_MARKED(object))
             return false;
 
+#if PROFILE_TIME_CONSUMING
+        ++state->processObjectCount;
+#endif
         bool has_references = GET_CLASS(object)->has_references;
         if (has_references || ShouldProcessValue(object, state->filter))
         {
@@ -463,7 +543,17 @@ namespace vm
         // Check if klass has further references - if not skip adding
         if (has_references)
         {
-            state->process_array->PushBack(object, state);
+            *state->process_array_local.next_item++ = object;
+            if (state->process_array_local.next_item - state->process_array_local.p_data >= kMaxLocalElementsSize)
+            {
+                state->process_array->mutex.Acquire();
+                for (int i = 0; i < kMaxLocalElementsSize; ++i)
+                {
+                    Il2CppObject* item = *--state->process_array_local.next_item;
+                    state->process_array->PushBackNoLock(item, state);
+                }
+                state->process_array->mutex.Release();
+            }
             return true;
         }
 
@@ -583,5 +673,281 @@ namespace vm
         //Filter objects and call callback to register found objects
         liveness_state->FilterObjects();
     }
+
+    int Liveness::GetStaticsCount()
+    {
+        const il2cpp::utils::dynamic_array<Il2CppClass*>& classesWithStatics = Class::GetStaticFieldData();
+        return classesWithStatics.size();
+    }
+    
+    void Liveness::CollectStaticsByWorker(void* state, int need_reset, int start_index, int batch_count)
+    {
+        LivenessState* liveness_state = (LivenessState*)state;
+        const il2cpp::utils::dynamic_array<Il2CppClass*>& classesWithStatics = Class::GetStaticFieldData();
+
+        if (need_reset != 0)
+        {
+            liveness_state->Reset();
+        }
+
+        int count = 0;
+        for (il2cpp::utils::dynamic_array<Il2CppClass*>::const_iterator iter = classesWithStatics.begin() + start_index;
+             iter != classesWithStatics.end();
+             iter++)
+        {
+            if (count >= batch_count) break;
+            Il2CppClass* klass = *iter;
+            FieldInfo *field;
+            if (!klass)
+                continue;
+            if (klass->image == il2cpp_defaults.corlib)
+                continue;
+            if (klass->size_inited == 0)
+                continue;
+
+#if PROFILE_TIME_CONSUMING
+            uint32_t startTime = os::Time::GetTicksMillisecondsMonotonic();
+#endif
+            void* fieldIter = NULL;
+            while ((field = Class::GetFields(klass, &fieldIter)))
+            {
+                if (!(field->type->attrs & FIELD_ATTRIBUTE_STATIC))
+                    continue;
+                if (!LivenessState::FieldCanContainReferences(field))
+                    continue;
+                // shortcut check for thread-static field
+                if (field->offset == THREAD_STATIC_FIELD_OFFSET)
+                    continue;
+
+                if (Type::IsStruct(field->type))
+                {
+                    char* offseted = (char*)klass->static_fields;
+                    offseted += field->offset;
+                    if (Type::IsGenericInstance(field->type))
+                    {
+                        IL2CPP_ASSERT(field->type->data.generic_class->cached_class);
+                        LivenessState::TraverseObjectInternal((Il2CppObject*)offseted, true, field->type->data.generic_class->cached_class, liveness_state);
+                    }
+                    else
+                    {
+                        LivenessState::TraverseObjectInternal((Il2CppObject*)offseted, true, Type::GetClass(field->type), liveness_state);
+                    }
+                }
+                else
+                {
+                    Il2CppObject* val = NULL;
+
+                    Field::StaticGetValue(field, &val);
+
+                    if (val)
+                    {
+                        LivenessState::AddProcessObject(val, liveness_state);
+                    }
+                }
+            }
+#if PROFILE_TIME_CONSUMING
+            if (s_ProfileTimeConsuming)
+            {
+                uint32_t delta = os::Time::GetTicksMillisecondsMonotonic() - startTime;
+                const char* klassName = Liveness::GetClassName(klass);
+                if (klassName != NULL)
+                {
+                    std::map<const char*, uint32_t>::iterator it = liveness_state->collectStaticCostMap.find(klassName);
+                    if (it == liveness_state->collectStaticCostMap.end() || it->second < delta)
+                    {
+                        liveness_state->collectStaticCostMap[klassName] = delta;
+                    }
+                }
+            }
+#endif
+        }
+    }
+
+    void Liveness::ProcessObjects(void* state)
+    {
+        LivenessState* liveness_state = (LivenessState*)state;
+        liveness_state->TraverseObjects();
+        liveness_state->FilterObjects();
+    }
+
+    void Liveness::FromStaticsByWorker(void* state, int worker_index, int worker_count)
+    {
+        LivenessState* liveness_state = (LivenessState*)state;
+        const il2cpp::utils::dynamic_array<Il2CppClass*>& classesWithStatics = Class::GetStaticFieldData();
+
+        liveness_state->Reset();
+
+        int count = 0;
+        for (il2cpp::utils::dynamic_array<Il2CppClass*>::const_iterator iter = classesWithStatics.begin();
+             iter != classesWithStatics.end();
+             iter++)
+        {
+            if (++count % worker_count != worker_index) continue;
+            Il2CppClass* klass = *iter;
+            FieldInfo *field;
+            if (!klass)
+                continue;
+            if (klass->image == il2cpp_defaults.corlib)
+                continue;
+            if (klass->size_inited == 0)
+                continue;
+
+            void* fieldIter = NULL;
+            while ((field = Class::GetFields(klass, &fieldIter)))
+            {
+                if (!(field->type->attrs & FIELD_ATTRIBUTE_STATIC))
+                    continue;
+                if (!LivenessState::FieldCanContainReferences(field))
+                    continue;
+                // shortcut check for thread-static field
+                if (field->offset == THREAD_STATIC_FIELD_OFFSET)
+                    continue;
+
+                if (Type::IsStruct(field->type))
+                {
+                    char* offseted = (char*)klass->static_fields;
+                    offseted += field->offset;
+                    if (Type::IsGenericInstance(field->type))
+                    {
+                        IL2CPP_ASSERT(field->type->data.generic_class->cached_class);
+                        LivenessState::TraverseObjectInternal((Il2CppObject*)offseted, true, field->type->data.generic_class->cached_class, liveness_state);
+                    }
+                    else
+                    {
+                        LivenessState::TraverseObjectInternal((Il2CppObject*)offseted, true, Type::GetClass(field->type), liveness_state);
+                    }
+                }
+                else
+                {
+                    Il2CppObject* val = NULL;
+
+                    Field::StaticGetValue(field, &val);
+
+                    if (val)
+                    {
+                        LivenessState::AddProcessObject(val, liveness_state);
+                    }
+                }
+            }
+        }
+        liveness_state->TraverseObjects();
+        //Filter objects and call callback to register found objects
+        liveness_state->FilterObjects();
+    }
+
+    int Liveness::TryStealTraverseJob(void* state, void* state_to_steal, int worker_count, int min_steal_count)
+    {
+        const int kMaxStealCount = 32;
+        int successCount = 0;
+        LivenessState* liveness_state = (LivenessState*)state;
+        LivenessState* liveness_state_to_steal = (LivenessState*)state_to_steal;
+        CustomGrowableBlockArray* process_array_to_steal = liveness_state_to_steal->process_array;
+        if (!process_array_to_steal->IsEmpty() && process_array_to_steal->count >= min_steal_count * 2)
+        {
+            CustomGrowableBlockArray* process_array = liveness_state->process_array;
+            int steal_count = process_array_to_steal->count / worker_count;
+            if (steal_count < min_steal_count)
+            {
+                steal_count = min_steal_count;
+            }
+            else if (steal_count > kMaxStealCount)
+            {
+                steal_count = kMaxStealCount;
+            }
+
+            process_array_to_steal->mutex.Acquire();
+
+            for (int i = 0; i < steal_count; ++i)
+            {
+                Il2CppObject* obj = process_array_to_steal->PopBackNoLock();
+                if (obj != NULL)
+                {
+                    process_array->PushBackNoLock(obj, liveness_state);
+                    ++successCount;
+                }
+                else if (process_array_to_steal->IsEmpty())
+                {
+                    break;
+                }
+            }
+
+            process_array_to_steal->mutex.Release();
+            
+            liveness_state->TraverseObjects();
+            liveness_state->FilterObjects();
+        }
+
+        return successCount;
+    }
+
+    void Liveness::ResetTimeConsumingReport(bool profileOn)
+    {
+#if PROFILE_TIME_CONSUMING
+        s_ProfileTimeConsuming = profileOn;
+#endif
+    }
+
+    const char* Liveness::GetClassName(Il2CppClass* klass)
+    {
+        if (klass == NULL)
+            return "_";
+        if (!klass->rank)
+            return klass->name ? klass->name : "_";
+        return il2cpp::utils::StringUtils::Printf("%s*", GetClassName(klass->element_class)).c_str();
+    }
+
+    const char* Liveness::GenerateTimeConsumingReport(void* state, uint32_t threshold)
+    {
+#if PROFILE_TIME_CONSUMING
+        if (s_ProfileTimeConsuming)
+        {
+            LivenessState* liveness_state = (LivenessState*)state;
+
+            std::string report;
+            report += "ProcessObjectCount:";
+            report += std::to_string(liveness_state->processObjectCount);
+            report += "\nCollectStaticsByWorker: ";
+            AppendTimeConsumingReport(report, liveness_state->collectStaticCostMap, threshold);
+            report += "\nTraverseGenericObject: ";
+            AppendTimeConsumingReport(report, liveness_state->traverseObjCostMap, threshold);
+
+            return report.c_str();
+        }
+        else
+        {
+            return "profile off";
+        }
+#else
+        return "feature unsupported";
+#endif
+    }
+
+
+    static bool SortTimeConsumingRecord(std::pair<const char*, uint32_t>& a, std::pair<const char*, uint32_t>& b)
+    {
+        return a.second > b.second;
+    }
+    
+    void Liveness::AppendTimeConsumingReport(std::string& report, std::map<const char*, uint32_t>& records, uint32_t threshold)
+    {
+#if PROFILE_TIME_CONSUMING
+        std::vector<std::pair<const char*, uint32_t>> validRecords;
+        for (std::map<const char*, uint32_t>::iterator i = records.begin(); i != records.end(); ++i)
+        {
+            if (i->first == NULL || i->second < threshold)
+                continue;
+            validRecords.push_back(std::pair<const char*, uint32_t>(i->first, i->second));
+        }
+        std::sort(validRecords.begin(), validRecords.end(), SortTimeConsumingRecord);
+
+        char buffer[256];
+        for (std::vector<std::pair<const char*, uint32_t>>::iterator i = validRecords.begin(); i != validRecords.end(); ++i)
+        {
+            std::snprintf(buffer, sizeof(buffer),"%s:%u ", i->first, i->second);
+            report += buffer;
+        }
+#endif
+    }
+
 } /* namespace vm */
 } /* namespace il2cpp */

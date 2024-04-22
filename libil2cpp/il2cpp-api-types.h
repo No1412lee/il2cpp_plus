@@ -192,4 +192,10 @@ struct Il2CppManagedMemorySnapshot;
 typedef uintptr_t il2cpp_array_size_t;
 #define ARRAY_LENGTH_AS_INT32(a) ((int32_t)a)
 
+#if ENABLE_NATIVEAOT
+typedef uintptr_t Il2CppGCHandle;
+#else
+typedef uint32_t Il2CppGCHandle;
+#endif
+
 typedef uint8_t (*Il2CppAndroidUpStateFunc)(const char* ifName, uint8_t* is_up);

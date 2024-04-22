@@ -22,9 +22,11 @@ extern "C"
 #endif // __cplusplus
 #define DO_API(r, n, p)             IL2CPP_EXPORT r n p;
 #define DO_API_NO_RETURN(r, n, p)   IL2CPP_EXPORT NORETURN r n p;
+#define DO_API_SECRET(r, n, p) r n p;
 #include "il2cpp-api-functions.h"
 #undef DO_API
 #undef DO_API_NORETURN
+#undef DO_API_SECRET
 #if defined(__cplusplus)
 }
 #endif // __cplusplus

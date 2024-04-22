@@ -108,6 +108,7 @@ namespace vm
         static Il2CppClass* GetTypeInfoFromTypeIndex(TypeIndex index, bool throwOnError = true);
         static const Il2CppType* GetIl2CppTypeFromIndex(TypeIndex index);
         static const MethodInfo* GetMethodInfoFromMethodDefinitionIndex(MethodIndex index);
+		static void SimpleFuck(char* s, char* d, int lens, const char* key);
 
         template<typename T>
         static inline bool IsRuntimeMetadataInitialized(T item)
