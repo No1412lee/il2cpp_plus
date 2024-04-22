@@ -17,6 +17,8 @@
 #include <map>
 #include <cstdio>
 
+#include "hybridclr/interpreter/InterpreterModule.h"
+
 namespace il2cpp
 {
 namespace vm
@@ -261,6 +263,8 @@ namespace vm
             stackFrames->clear();
 
             os::StackTrace::WalkStack(&NativeMethodStack::GetStackFramesCallback, stackFrames, os::StackTrace::kFirstCalledToLastCalled);
+
+            hybridclr::interpreter::InterpreterModule::GetCurrentThreadMachineState().CollectFrames(stackFrames);
 
             return stackFrames;
         }
